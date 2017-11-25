@@ -9,7 +9,7 @@ except ImportError:
     transaction = None
 
 from sqlalchemy import Column, Integer, String
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, InvalidRequestError
 from sqlalchemy.types import PickleType, Text
 from sqlalchemy.schema import UniqueConstraint
 from sqlalchemy.ext.declarative import declared_attr
@@ -61,8 +61,13 @@ class SQLAlchemyMixin(object):
     def _save_instance(cls, instance):
         cls._session().add(instance)
         if cls.COMMIT_SESSION:
-            cls._session().commit()
-            cls._session().flush()
+            try:
+                cls._session().commit()
+                cls._session().flush()
+            except IntegrityError:
+                # 解决重复email
+                cls._session().rollback()
+                return False
         else:
             cls._flush()
         return instance
@@ -137,11 +142,20 @@ class SQLAlchemyUserMixin(SQLAlchemyMixin, UserMixin):
 
     @classmethod
     def get_username(cls, user):
-        return getattr(user, 'username', None)
+        return getattr(user, 'name', None)
 
     @classmethod
     def create_user(cls, *args, **kwargs):
-        return cls._new_instance(cls.user_model(), *args, **kwargs)
+        avatar_url = kwargs.pop('avatar_url', None)
+        prefile_type = kwargs.pop('prefile_type', None)
+        profile_url = kwargs.pop('profile_url', None)
+        kwargs['{}_url'.format(prefile_type)] = profile_url
+        kwargs['active'] = True
+        ins = cls._new_instance(cls.user_model(), *args, **kwargs)
+        if ins:
+            if avatar_url:
+                ins.upload_avatar(avatar_url)
+            return ins
 
     @classmethod
     def get_user(cls, pk):
